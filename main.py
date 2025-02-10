@@ -5,6 +5,9 @@ import threading
 import re
 import json
 import pyperclip
+import io
+import matplotlib.pyplot as plt
+from PIL import Image, ImageTk
 
 class OllamaGUI:
     def __init__(self, root):
@@ -59,6 +62,7 @@ class OllamaGUI:
         self.typing_active = False
         self.current_response = []
         self.response_position = None
+        self.rendered_images = []  
         self.load_models()
 
     def configure_text_styles(self):
@@ -82,6 +86,7 @@ class OllamaGUI:
             spacing1=5,
             spacing3=5
         )
+        self.chat_history.tag_configure('bold', font=('Arial', 12, 'bold'))
 
     def create_context_menu(self):
         self.context_menu = Menu(self.root, tearoff=0)
@@ -132,25 +137,155 @@ class OllamaGUI:
         self.typing_active = False
         self.status_var.set("Ready")
 
-
     def format_response(self, text):
         start = self.chat_history.index("insert linestart")
         end = self.chat_history.index("end")
         self.chat_history.delete(start, end)
+        parts = []
+        current_pos = 0
+        
+        pattern = re.compile(r'(<think>[\s\S]*?</think>|```[\s\S]*?```)')
+        
+        for match in pattern.finditer(text):
+            if match.start() > current_pos:
+                parts.append(text[current_pos:match.start()])
+            
+            parts.append(match.group())
+            current_pos = match.end()
 
-        parts = re.split(r'(<think>[\s\S]*?</think>|```[\s\S]*?```)', text)
+        if current_pos < len(text):
+            parts.append(text[current_pos:])
+
         for part in parts:
-            if not part:
-                continue
             if part.startswith('<think>'):
                 content = re.sub(r'<think>|</think>', '', part).strip()
                 self.insert_think_block(content)
             elif part.startswith('```'):
-                language = part.split('\n')[0][3:] or ''
-                code = '\n'.join(part.split('\n')[1:-1]).strip()
+                lines = part.split('\n')
+                first_line = lines[0]
+                language = first_line[3:].strip() if len(first_line) > 3 else ""
+                code = '\n'.join(lines[1:-1]).strip()
                 self.insert_code_block(code, language)
             else:
-                self.chat_history.insert(tk.END, part.strip() + '\n', 'assistant')
+                if part.strip():
+                    self.insert_markdown_text(part.strip() + '\n')
+
+    def insert_markdown_text(self, text):
+        """
+        Processes text for LaTeX equations and markdown formatting
+        """
+
+        segments = []
+        current_pos = 0
+
+        pattern = re.compile(r"""
+            (\$\$.*?\$\$)   
+            |(\$[^\$]+?\$) 
+            |(\*\*.*?\*\*)
+        """, re.VERBOSE | re.DOTALL)
+        
+        for match in pattern.finditer(text):
+            if match.start() > current_pos:
+                segments.append(('text', text[current_pos:match.start()]))
+            
+            matched_text = match.group()
+            if matched_text.startswith('$$'):
+                equation = matched_text[2:-2].strip()
+                segments.append(('display_math', equation))
+            elif matched_text.startswith('$'):
+                equation = matched_text[1:-1].strip()
+                segments.append(('inline_math', equation))
+            elif matched_text.startswith('**'):
+                bold_content = matched_text[2:-2]
+                segments.append(('bold', bold_content))
+                
+            current_pos = match.end()
+
+        if current_pos < len(text):
+            segments.append(('text', text[current_pos:]))
+        
+        for segment_type, content in segments:
+            if segment_type == 'text':
+                self.chat_history.insert(tk.END, content, 'assistant')
+            elif segment_type == 'display_math':
+                try:
+                    photo = self.render_latex(content, display=True)
+                    self.chat_history.insert(tk.END, '\n')
+                    self.chat_history.image_create(tk.END, image=photo)
+                    self.chat_history.insert(tk.END, '\n')
+                except Exception as e:
+                    self.chat_history.insert(tk.END, f"$${content}$$", 'assistant')
+            elif segment_type == 'inline_math':
+                try:
+                    photo = self.render_latex(content, display=False)
+                    self.chat_history.image_create(tk.END, image=photo)
+                except Exception as e:
+                    self.chat_history.insert(tk.END, f"${content}$", 'assistant')
+            elif segment_type == 'bold':
+                self.chat_history.insert(tk.END, content, ('assistant', 'bold'))
+
+
+
+
+    def render_latex(self, equation, display=False):
+        """
+        Renders a LaTeX equation into a PhotoImage using matplotlib.
+        :param equation: The LaTeX string (without delimiters)
+        :param display: If True, renders as a display equation (larger)
+        :return: A Tkinter PhotoImage
+        """
+        dpi = 150
+        fontsize = 14 if display else 12
+        
+        fig = plt.figure(figsize=(0.01, 0.01))
+        fig.patch.set_alpha(0.0)
+
+        ax = fig.add_axes([0, 0, 1, 1])
+        ax.set_axis_off()
+
+        if display:
+            text_obj = ax.text(0.5, 0.5, f"${equation}$",
+                            fontsize=fontsize,
+                            horizontalalignment='center',
+                            verticalalignment='center',
+                            usetex=True)
+        else:
+            text_obj = ax.text(0.5, 0.5, f"${equation}$",
+                            fontsize=fontsize,
+                            horizontalalignment='center',
+                            verticalalignment='center',
+                            usetex=True)
+ 
+        renderer = fig.canvas.get_renderer()
+
+        bbox = text_obj.get_window_extent(renderer=renderer)
+
+        bbox_inches = bbox.transformed(fig.dpi_scale_trans.inverted())
+  
+        padding = 0.1
+        bbox_inches.x0 -= padding
+        bbox_inches.x1 += padding
+        bbox_inches.y0 -= padding
+        bbox_inches.y1 += padding
+
+        fig.set_size_inches(bbox_inches.width, bbox_inches.height)
+
+        buffer = io.BytesIO()
+        plt.savefig(buffer, format='png', 
+                    bbox_inches='tight',
+                    pad_inches=0.0,
+                    transparent=True,
+                    dpi=dpi)
+        plt.close(fig)
+        
+        buffer.seek(0)
+        image = Image.open(buffer)
+        photo = ImageTk.PhotoImage(image)
+
+        self.rendered_images.append(photo)
+        
+        return photo
+
 
     def insert_think_block(self, content):
         current_pos = self.chat_history.index(tk.INSERT)
@@ -158,16 +293,15 @@ class OllamaGUI:
         
         if current_pos != line_start:
             self.chat_history.insert(tk.END, "\n")
-
         self.chat_history.insert(tk.END, "🤔 Thinking:\n", 'think')
         self.chat_history.insert(tk.END, f"{content}\n", 'think')
         self.chat_history.insert(tk.END, "\n")  
 
-    def insert_code_block(self, code):
+    def insert_code_block(self, code, language=""):
         self.chat_history.insert(tk.END, f"\n{code}\n", 'code')
         btn = ttk.Button(self.chat_history, text="📋 Copy", 
-                       command=lambda c=code: self.copy_code(c),
-                       style='Copy.TButton')
+                         command=lambda c=code: self.copy_code(c),
+                         style='Copy.TButton')
         self.chat_history.window_create(tk.END, window=btn)
         self.chat_history.insert(tk.END, "\n")
 
@@ -294,9 +428,9 @@ if __name__ == "__main__":
     root = tk.Tk()
     style = ttk.Style()
     style.configure('Copy.TButton', 
-                   font=('Arial', 8),
-                   padding=2,
-                   relief='flat',
-                   background='#e1e1e1')
+                    font=('Arial', 8),
+                    padding=2,
+                    relief='flat',
+                    background='#e1e1e1')
     app = OllamaGUI(root)
     root.mainloop()
