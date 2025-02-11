@@ -174,15 +174,10 @@ class OllamaGUI:
         """
         Processes text for LaTeX equations and markdown formatting
         """
-
         segments = []
         current_pos = 0
 
-        pattern = re.compile(r"""
-            (\$\$.*?\$\$)   
-            |(\$[^\$]+?\$) 
-            |(\*\*.*?\*\*)
-        """, re.VERBOSE | re.DOTALL)
+        pattern = re.compile(r'(\$\$.*?\$\$)|(\$[^\$]+?\$)')
         
         for match in pattern.finditer(text):
             if match.start() > current_pos:
@@ -195,9 +190,6 @@ class OllamaGUI:
             elif matched_text.startswith('$'):
                 equation = matched_text[1:-1].strip()
                 segments.append(('inline_math', equation))
-            elif matched_text.startswith('**'):
-                bold_content = matched_text[2:-2]
-                segments.append(('bold', bold_content))
                 
             current_pos = match.end()
 
@@ -214,20 +206,17 @@ class OllamaGUI:
                     self.chat_history.image_create(tk.END, image=photo)
                     self.chat_history.insert(tk.END, '\n')
                 except Exception as e:
-                    self.chat_history.insert(tk.END, f"$${content}$$", 'assistant')
+                    self.chat_history.insert(tk.END, f"$$${content}$$$", 'assistant')
             elif segment_type == 'inline_math':
                 try:
                     photo = self.render_latex(content, display=False)
                     self.chat_history.image_create(tk.END, image=photo)
                 except Exception as e:
                     self.chat_history.insert(tk.END, f"${content}$", 'assistant')
-            elif segment_type == 'bold':
-                self.chat_history.insert(tk.END, content, ('assistant', 'bold'))
-
-
-
 
     def render_latex(self, equation, display=False):
+        print(f"Rendering LaTeX equation: {equation}")
+        print(f"Display mode: {display}")
         """
         Renders a LaTeX equation into a PhotoImage using matplotlib.
         :param equation: The LaTeX string (without delimiters)
@@ -250,18 +239,18 @@ class OllamaGUI:
                             verticalalignment='center',
                             usetex=True)
         else:
-            text_obj = ax.text(0.5, 0.5, f"${equation}$",
+            text_obj = ax.text(0.5, 0.5, f"${equation}",
                             fontsize=fontsize,
                             horizontalalignment='center',
                             verticalalignment='center',
                             usetex=True)
- 
+    
         renderer = fig.canvas.get_renderer()
 
         bbox = text_obj.get_window_extent(renderer=renderer)
 
         bbox_inches = bbox.transformed(fig.dpi_scale_trans.inverted())
-  
+    
         padding = 0.1
         bbox_inches.x0 -= padding
         bbox_inches.x1 += padding
